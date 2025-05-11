@@ -1,0 +1,56 @@
+name: Deploy RedditBot to AWS Lambda
+
+on:
+  push:
+    branches:
+      - main # Or your primary branch, e.g., master
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for AWS OIDC authentication (recommended)
+      contents: read # Required to checkout the code
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::409365783261:role/GithubActionsLambdaDeploy
+          aws-region: ${{ secrets.AWS_REGION }} # e.g., us-east-1
+
+      - name: Build Lambda deployment package
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/var/task public.ecr.aws/amazonlinux/amazonlinux:2023 /bin/bash -c "\
+            dnf update -y && \
+            dnf install -y python3.12 python3.12-pip zip && \
+            echo 'Installed build tools.' && \
+            cd /var/task && \
+            echo 'Changed to /var/task. Contents:' && ls -la && \
+            echo 'Attempting to install requirements...' && \
+            python3.12 -m pip install -r requirements.txt -t ./package && \
+            echo 'Requirements installed. Copying .py files...' && \
+            cp *.py ./package/ && \
+            echo '.py files copied. Zipping package...' && \
+            cd package && \
+            zip -r ../deployment-package.zip . && \
+            echo 'Lambda package zipped.' && \
+            cd .. && \
+            # The zip file is now at /var/task/deployment-package.zip
+            # It will be available in ${{ github.workspace }}/deployment-package.zip on the runner
+            echo 'Build complete.deployment-package.zip created in workspace.'"
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: 1 # Suppress pip version check noise
+          PIP_NO_CACHE_DIR: "off" # Enable caching for faster builds if appropriate layer caching is used later
+
+      - name: Deploy to AWS Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name RedditBot-Panda \
+            --zip-file fileb://deployment-package.zip \
+            --publish
+        env:
+          AWS_PAGER: "" # Disable AWS CLI pager for cleaner logs

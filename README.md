@@ -38,13 +38,13 @@ This bot scans Reddit for posts seeking artists with a light-hearted, whimsical 
 
    ```
    aws lambda create-function \
-     --function-name RedditBot \
+     --function-name RedditBot-Panda \
      --zip-file fileb://deployment-package.zip \
      --handler main.lambda_handler \
-     --runtime python3.9 \
-     --timeout 300 \
-     --memory-size 256 \
-     --role arn:aws:iam::your-account-id:role/lambda-reddit-bot-role
+     --runtime python3.12 \
+     --timeout 500 \
+     --memory-size 128 \
+     --role arn:aws:iam::409365783261:role/service-role/lambda_s3_iam_role
    ```
 
 4. **Set Environment Variables**
@@ -53,8 +53,8 @@ This bot scans Reddit for posts seeking artists with a light-hearted, whimsical 
 
    ```
    aws lambda update-function-configuration \
-     --function-name RedditBot \
-     --environment "Variables={USERNAME=your_reddit_username,PASSWORD=your_reddit_password,CLIENT_ID=your_client_id,CLIENT_SECRET=your_client_secret,USER_AGENT=your_user_agent,OPENAI_API_KEY=your_openai_api_key,S3_BUCKET_NAME=your-reddit-bot-bucket-name,SUBREDDITS=forhire,hireanartist,artcommissions,hungryartists}"
+     --function-name RedditBot-Panda \
+     --environment "Variables={USERNAME=your_reddit_username,PASSWORD=your_reddit_password,CLIENT_ID=your_client_id,CLIENT_SECRET=your_client_secret,USER_AGENT=your_user_agent,OPENAI_API_KEY=your_openai_api_key,S3_BUCKET_NAME=your-reddit-bot-bucket-name,SUBREDDITS='forhire,hireanartist,artcommissions,hungryartists'}"
    ```
 
 5. **Create a CloudWatch Event Rule**
