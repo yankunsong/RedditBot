@@ -110,7 +110,9 @@ First, determine if the post is FROM an artist looking for work (which we should
 IGNORE posts where the person is an artist advertising their services or looking for clients.
 ONLY consider posts where someone is looking to hire or commission an artist.
 
-If the post is from an artist looking for work, respond with: {"is_relevant": false, "confidence": 0.0, "is_artist_seeking_work": true}
+Your response MUST be a valid JSON object.
+
+If the post is from an artist looking for work, respond with the following JSON structure: {"is_relevant": false, "confidence": 0.0, "is_artist_seeking_work": true}
 
 If the post is from someone looking to hire an artist, then evaluate if they're looking for an artist with this style:
 - Light-hearted, healing, whimsical, humorous, and warm
@@ -127,14 +129,14 @@ Consider posts seeking artists for:
 - Family-friendly or educational content
 - Character design with warmth and personality
 
-If the post is from someone looking to hire an artist matching our style, respond with:
+If the post is from someone looking to hire an artist matching our style, respond with the following JSON structure:
 {"is_relevant": true, "confidence": 0.X, "is_artist_seeking_work": false}
 
-If the post is from someone looking to hire an artist but NOT matching our style, respond with:
+If the post is from someone looking to hire an artist but NOT matching our style, respond with the following JSON structure:
 {"is_relevant": false, "confidence": 0.X, "is_artist_seeking_work": false}
 
-Where 0.X is your confidence level from 0.0 to 1.0."""},
-                {"role": "user", "content": f"Is the following Reddit post seeking an artist with a style matching or compatible with the description above? The post doesn't have to be specifically about children's books - it could be any project where this style would be appropriate. Remember to first determine if the post is FROM an artist looking for work (ignore) or FROM someone LOOKING TO HIRE an artist (consider).\n\n{content}"}
+Where 0.X is your confidence level from 0.0 to 1.0. Ensure your output is only the JSON object."""},
+                {"role": "user", "content": f"Is the following Reddit post seeking an artist with a style matching or compatible with the description above? The post doesn't have to be specifically about children's books - it could be any project where this style would be appropriate. Remember to first determine if the post is FROM an artist looking for work (ignore) or FROM someone LOOKING TO HIRE an artist (consider). Provide your response as a JSON object.\n\n{content}"}
             ],
             response_format={"type": "json_object"}
         )
