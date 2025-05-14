@@ -7,6 +7,7 @@ from datetime import datetime
 import pytz
 from openai import OpenAI
 from dotenv import load_dotenv
+import praw.exceptions
 
 def load_environment_variables():
     """Load environment variables from .env file or Lambda environment"""
@@ -294,10 +295,24 @@ def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_l
                         "response": customized_response
                     }
                     
+                except praw.exceptions.APIException as api_e:
+                    print(f"Failed to reply to post {post.id} due to APIException:")
+                    print(f"  Error Type: {api_e.error_type}")
+                    print(f"  Message: {api_e.message}")
+                    if api_e.field:
+                        print(f"  Field: {api_e.field}")
+                    print(f"  Raw PRAW Exception: {api_e}")
+                    processed_posts_log_data[post.id]["reply_status"] = "failure"
+                    processed_posts_log_data[post.id]["reply_error_type"] = api_e.error_type
+                    processed_posts_log_data[post.id]["reply_error_message"] = api_e.message
+                    processed_posts_log_data[post.id]["reply_error_field"] = api_e.field if api_e.field else "N/A"
+                    processed_posts_log_data[post.id]["reply_error_details"] = str(api_e)
                 except Exception as e:
-                    print(f"Failed to reply to post {post.id}: {e}")
+                    print(f"Failed to reply to post {post.id} due to a general error: {e}")
+                    print(f"  Error Type: {type(e).__name__}")
                     processed_posts_log_data[post.id]["reply_status"] = "failure"
                     processed_posts_log_data[post.id]["reply_error"] = str(e)
+                    processed_posts_log_data[post.id]["reply_error_type"] = type(e).__name__
             else:
                 processed_posts_log_data[post.id]["reply_status"] = "not_applicable_irrelevant"
                     

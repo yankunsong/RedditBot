@@ -64,24 +64,24 @@ This bot scans Reddit for posts seeking artists with a light-hearted, whimsical 
    ```
    aws events put-rule \
      --name RedditBotSchedule \
-     --schedule-expression "rate(1 hour)"
+     --schedule-expression "rate(30 minutes)"
    ```
 
    Then connect it to your Lambda function:
 
    ```
    aws lambda add-permission \
-     --function-name RedditBot \
+     --function-name RedditBot-Panda \
      --statement-id cwe-invoke \
      --action lambda:InvokeFunction \
      --principal events.amazonaws.com \
-     --source-arn arn:aws:events:region:your-account-id:rule/RedditBotSchedule
+     --source-arn arn:aws:events:us-east-1:409365783261:rule/RedditBotSchedule
    ```
 
    ```
    aws events put-targets \
      --rule RedditBotSchedule \
-     --targets "Id"="1","Arn"="arn:aws:lambda:region:your-account-id:function:RedditBot"
+     --targets "Id"="1","Arn"="arn:aws:lambda:us-east-1:409365783261:function:RedditBot-Panda"
    ```
 
 6. **IAM Role Permissions**
