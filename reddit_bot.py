@@ -227,7 +227,27 @@ def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_l
     for subreddit_name in subreddits_to_check:
         print(f"Checking subreddit: r/{subreddit_name}")
         subreddit = reddit_instance.subreddit(subreddit_name)
-        for post in subreddit.new(limit=post_scan_limit):
+        try:
+            posts_iterable = subreddit.new(limit=post_scan_limit)
+        except praw.exceptions.APIException as api_e:
+            print(f"Failed to fetch posts from r/{subreddit_name} due to APIException:")
+            print(f"  Error Type: {api_e.error_type}")
+            print(f"  Message: {api_e.message}")
+            if api_e.field:
+                print(f"  Field: {api_e.field}")
+            print(f"  Raw PRAW Exception: {api_e}")
+            print(f"Skipping subreddit r/{subreddit_name} due to API error.")
+            # Log this error in processed_posts_log_data if needed, perhaps under a special key
+            # For now, just print and continue to the next subreddit
+            continue # Skip to the next subreddit
+        except Exception as e:
+            print(f"Failed to fetch posts from r/{subreddit_name} due to a general error: {e}")
+            print(f"  Error Type: {type(e).__name__}")
+            print(f"Skipping subreddit r/{subreddit_name} due to error.")
+            # Log this error similarly
+            continue # Skip to the next subreddit
+
+        for post in posts_iterable:
             if post.id in processed_posts_log_data:
                 # Optionally, update a "last_seen" timestamp if desired
                 # For now, just skip if already processed.
