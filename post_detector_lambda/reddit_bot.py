@@ -261,7 +261,9 @@ def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_l
                         sqs_client.send_message(
                             QueueUrl=sqs_queue_url,
                             MessageBody=json.dumps(message_to_send),
-                            DelaySeconds=delay_seconds
+                            DelaySeconds=delay_seconds,
+                            MessageGroupId="job_seeking_replies",
+                            MessageDeduplicationId=post.id
                         )
                         print(f"Successfully sent message for post: {post.id} - {post.title} to SQS with {delay_seconds}s delay.")
                         
