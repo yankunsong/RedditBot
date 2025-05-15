@@ -6,16 +6,12 @@ import random
 from datetime import datetime
 import pytz
 from openai import OpenAI
-from dotenv import load_dotenv
 import praw.exceptions
+import boto3
 
 def load_environment_variables():
-    """Load environment variables from .env file or Lambda environment"""
-    # In Lambda, we'll use environment variables directly
-    # When testing locally, we'll use dotenv
-    if os.getenv("AWS_LAMBDA_FUNCTION_NAME") is None:
-        load_dotenv()
-    
+    """Load environment variables from Lambda environment"""
+    # Assuming this runs in Lambda, environment variables are directly available
     return {
         "username": os.getenv("USERNAME"),
         "password": os.getenv("PASSWORD"),
@@ -23,7 +19,8 @@ def load_environment_variables():
         "client_secret": os.getenv("CLIENT_SECRET"),
         "user_agent": os.getenv("USER_AGENT"),
         "openai_api_key": os.getenv("OPENAI_API_KEY"),
-        "post_scan_limit": int(os.getenv("POST_SCAN_LIMIT", 25)) # Default to 25 posts
+        "post_scan_limit": int(os.getenv("POST_SCAN_LIMIT", 25)), # Default to 25 posts
+        "SQS_QUEUE_URL": os.getenv("SQS_QUEUE_URL")
     }
 
 def get_reddit_instance(credentials):
@@ -35,51 +32,6 @@ def get_reddit_instance(credentials):
         username=credentials["username"],
         password=credentials["password"],
     )
-
-def load_processed_posts_log(log_file):
-    """Load previously processed posts log from a JSON file"""
-    if os.path.exists(log_file) and os.path.getsize(log_file) > 0:
-        try:
-            with open(log_file, "r") as f:
-                log_data = json.load(f)
-        except json.JSONDecodeError:
-            print(f"Error reading {log_file}. Starting with empty data.")
-            log_data = {}
-    else:
-        log_data = {}
-    return log_data
-
-def save_processed_posts_log(log_data, log_file, log_updated_this_run):
-    """Save processed posts log to a JSON file if it was updated"""
-    if log_updated_this_run:
-        with open(log_file, "w") as f:
-            json.dump(log_data, f, indent=2)
-        print(f"Updated {log_file} with new post processing data")
-    else:
-        print("No new posts processed or existing posts updated in this execution (local file).")
-
-# New functions for the successful replies log
-SUCCESSFUL_REPLIES_LOG_FILENAME = "successful_replies_log.json"
-
-def load_successful_replies_log(filename=SUCCESSFUL_REPLIES_LOG_FILENAME):
-    """Load the log of successfully replied posts from a JSON file."""
-    if os.path.exists(filename) and os.path.getsize(filename) > 0:
-        try:
-            with open(filename, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            print(f"Error reading {filename}. Starting with an empty log.")
-            return {}
-    return {}
-
-def save_successful_replies_log(data, new_replies_were_made, filename=SUCCESSFUL_REPLIES_LOG_FILENAME):
-    """Save the log of successfully replied posts to a JSON file if new replies were made."""
-    if new_replies_were_made:
-        with open(filename, "w") as f:
-            json.dump(data, f, indent=2)
-        print(f"Updated {filename} with new successful reply data.")
-    else:
-        print(f"No new successful replies in this execution, {filename} not updated.")
 
 def is_suitable_art_style_match(title, body, openai_client):
     """
@@ -213,14 +165,22 @@ DO NOT include your website or contact information in this part - that will be a
         default_intro = "Hi there! I think my whimsical, light-hearted style would be perfect for your project. I specialize in warm, engaging illustrations that resonate with viewers of all ages."
         return f"{default_intro}\n\nYou can see my portfolio at: https://wenqinggu.com"
 
-def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_log_data, successful_replies_log_data):
-    """Check posts, reply to relevant ones, log all processing, and log successful replies separately."""
+def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_log_data, successful_queued_messages_data):
+    """Check posts, send relevant ones to SQS with delay, log all processing, and log successful queueing."""
     openai_client = OpenAI(api_key=credentials["openai_api_key"])
     post_scan_limit = credentials.get("post_scan_limit", 25)
     reddit_instance = get_reddit_instance(credentials)
     
-    new_replies_made = False
-    log_updated_this_run = False # For processed_posts_log
+    # Initialize SQS client
+    sqs_client = None
+    sqs_queue_url = credentials.get("SQS_QUEUE_URL") # Changed from SNS_TOPIC_ARN
+    if sqs_queue_url:
+        sqs_client = boto3.client('sqs') # Changed from 'sns'
+    else:
+        print("Warning: SQS_QUEUE_URL not set. Will not send to SQS.")
+
+    new_messages_queued = False # Renamed from new_publications_made
+    log_updated_this_run = False
     pacific_tz = pytz.timezone('US/Pacific')
     current_utc_timestamp = int(time.time())
 
@@ -267,8 +227,8 @@ def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_l
                 "title": post.title,
                 "url": f"https://www.reddit.com{post.permalink}",
                 "subreddit": subreddit_name,
-                "analysis_status": "pending", # To be updated after OpenAI call
-                "reply_status": "not_attempted"
+                "analysis_status": "pending",
+                "queue_status": "not_attempted" # Changed from publish_status
             }
             
             title = post.title
@@ -283,90 +243,59 @@ def check_and_reply_to_posts(credentials, subreddits_to_check, processed_posts_l
             # For now, is_suitable_art_style_match handles this internally by returning False, 0.0
 
             if is_relevant:
-                processed_posts_log_data[post.id]["reply_status"] = "attempting"
+                processed_posts_log_data[post.id]["queue_status"] = "attempting" # Changed from publish_status
                 try:
-                    sleep_time = random.uniform(0, 15)
-                    print(f"Waiting for {sleep_time:.2f} seconds before replying...")
-                    time.sleep(sleep_time)
-                    
                     customized_response = generate_customized_response(title, selftext, openai_client)
                     
-                    post.reply(customized_response)
-                    print(f"Replied to post: {post.id} - {post.title} (confidence: {confidence:.2f})")
-                    
-                    # Update processed posts log for success
-                    processed_posts_log_data[post.id]["reply_status"] = "success"
-                    reply_timestamp = int(time.time()) # Specific timestamp for reply
-                    processed_posts_log_data[post.id]["reply_timestamp"] = reply_timestamp
-                    processed_posts_log_data[post.id]["replied_with_response"] = customized_response[:200] + ("..." if len(customized_response) > 200 else "")
-                    new_replies_made = True
+                    if sqs_client and sqs_queue_url:
+                        message_to_send = {
+                            "postId": post.id,
+                            "postTitle": post.title,
+                            "postUrl": f"https://www.reddit.com{post.permalink}",
+                            "subreddit": subreddit_name,
+                            "responseBody": customized_response,
+                            "aiConfidence": confidence
+                        }
+                        delay_seconds = random.randint(60, 600) # Random delay between 1 and 10 minutes
+                        
+                        sqs_client.send_message(
+                            QueueUrl=sqs_queue_url,
+                            MessageBody=json.dumps(message_to_send),
+                            DelaySeconds=delay_seconds
+                        )
+                        print(f"Successfully sent message for post: {post.id} - {post.title} to SQS with {delay_seconds}s delay.")
+                        
+                        processed_posts_log_data[post.id]["queue_status"] = "success" # Changed from publish_status
+                        queue_timestamp = int(time.time())
+                        processed_posts_log_data[post.id]["queue_timestamp"] = queue_timestamp
+                        processed_posts_log_data[post.id]["queued_message_summary"] = customized_response[:100] + ("..." if len(customized_response) > 100 else "")
+                        processed_posts_log_data[post.id]["queue_delay_seconds"] = delay_seconds
+                        new_messages_queued = True # Renamed from new_publications_made
 
-                    # Add to successful replies log
-                    utc_reply_time = datetime.fromtimestamp(reply_timestamp, tz=pytz.UTC)
-                    pacific_reply_time = utc_reply_time.astimezone(pacific_tz)
-                    readable_reply_time = pacific_reply_time.strftime('%Y-%m-%d %H:%M:%S %Z')
-                    successful_replies_log_data[post.id] = {
-                        "timestamp": reply_timestamp,
-                        "readable_time": readable_reply_time,
-                        "title": post.title,
-                        "url": processed_posts_log_data[post.id]["url"],
-                        "subreddit": subreddit_name,
-                        "ai_confidence": confidence,
-                        "response": customized_response
-                    }
-                    
-                except praw.exceptions.APIException as api_e:
-                    print(f"Failed to reply to post {post.id} due to APIException:")
-                    print(f"  Error Type: {api_e.error_type}")
-                    print(f"  Message: {api_e.message}")
-                    if api_e.field:
-                        print(f"  Field: {api_e.field}")
-                    print(f"  Raw PRAW Exception: {api_e}")
-                    processed_posts_log_data[post.id]["reply_status"] = "failure"
-                    processed_posts_log_data[post.id]["reply_error_type"] = api_e.error_type
-                    processed_posts_log_data[post.id]["reply_error_message"] = api_e.message
-                    processed_posts_log_data[post.id]["reply_error_field"] = api_e.field if api_e.field else "N/A"
-                    processed_posts_log_data[post.id]["reply_error_details"] = str(api_e)
+                        utc_queue_time = datetime.fromtimestamp(queue_timestamp, tz=pytz.UTC)
+                        pacific_queue_time = utc_queue_time.astimezone(pacific_tz)
+                        readable_queue_time = pacific_queue_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+                        successful_queued_messages_data[post.id] = { # Renamed variable
+                            "timestamp": queue_timestamp,
+                            "readable_time": readable_queue_time,
+                            "title": post.title,
+                            "url": processed_posts_log_data[post.id]["url"],
+                            "subreddit": subreddit_name,
+                            "ai_confidence": confidence,
+                            "queued_message_summary": customized_response[:200] + ("..." if len(customized_response) > 200 else ""),
+                            "delay_seconds": delay_seconds
+                        }
+                    else:
+                        print(f"SQS client or Queue URL not available. Skipping SQS send for post: {post.id}")
+                        processed_posts_log_data[post.id]["queue_status"] = "skipped_sqs_not_configured"
+
                 except Exception as e:
-                    print(f"Failed to reply to post {post.id} due to a general error: {e}")
+                    print(f"Failed to send message for post {post.id} to SQS due to an error: {e}")
                     print(f"  Error Type: {type(e).__name__}")
-                    processed_posts_log_data[post.id]["reply_status"] = "failure"
-                    processed_posts_log_data[post.id]["reply_error"] = str(e)
-                    processed_posts_log_data[post.id]["reply_error_type"] = type(e).__name__
+                    processed_posts_log_data[post.id]["queue_status"] = "failure" # Changed from publish_status
+                    processed_posts_log_data[post.id]["queue_error"] = str(e) # Changed from publish_error
+                    processed_posts_log_data[post.id]["queue_error_type"] = type(e).__name__ # Changed from publish_error_type
             else:
-                processed_posts_log_data[post.id]["reply_status"] = "not_applicable_irrelevant"
+                processed_posts_log_data[post.id]["queue_status"] = "not_applicable_irrelevant" # Changed from publish_status
                     
-    return processed_posts_log_data, successful_replies_log_data, new_replies_made, log_updated_this_run
-
-def run_reddit_bot():
-    """Main function to run the Reddit bot"""
-    credentials = load_environment_variables()
-    # subreddits_to_check = ["forhire", "hireanartist", "artcommissions", "hungryartists", "starvingartists", "commissions", "publishing", "writing", "selfpublish", "childrensbookillustration"]
-    subreddits_to_check = ["testingground4bots"]
-    
-    processed_log_file = "processed_posts_log.json" 
-    processed_posts_log_data = load_processed_posts_log(processed_log_file)
-    
-    # Load the successful replies log
-    successful_replies_data = load_successful_replies_log()
-    
-    processed_posts_log_data, successful_replies_data, new_replies_made, log_updated_this_run = check_and_reply_to_posts(
-        credentials, subreddits_to_check, processed_posts_log_data, successful_replies_data
-    ) 
-    
-    save_processed_posts_log(processed_posts_log_data, processed_log_file, log_updated_this_run)
-    # Save the successful replies log
-    save_successful_replies_log(successful_replies_data, new_replies_made)
-    
-    return {
-        "statusCode": 200,
-        "body": json.dumps({
-            "message": "Reddit bot executed successfully (local)",
-            "new_replies": new_replies_made,
-            "log_updated": log_updated_this_run
-        })
-    }
-
-# This allows running directly for local testing
-if __name__ == "__main__":
-    run_reddit_bot()
+    return processed_posts_log_data, successful_queued_messages_data, new_messages_queued, log_updated_this_run 
